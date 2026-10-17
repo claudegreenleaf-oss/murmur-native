@@ -140,6 +140,17 @@ final class HelperApp {
                 reply(.data("BrowserWindowPositioned", BrowserPositioner.shared.position(name: name, mode: mode, minWidth: minW, fraction: frac)))
             }
 
+        case "GetRunningApps":
+            reply(.data("RunningApps", RunningApps.list()))
+
+        case "StartSpeakerPolling":
+            SpeakerPoller.shared.start(payloadDict(value))
+            reply(.ack)
+
+        case "StopSpeakerPolling":
+            SpeakerPoller.shared.stop()
+            reply(.ack)
+
         case "GetBrowserTabInfo":
             let pid = (payloadDict(value)["processId"] as? NSNumber)?.int32Value ?? 0
             axQueue.async { reply(.data("BrowserTabInfo", readBrowserTabInfo(pid: pid))) }
