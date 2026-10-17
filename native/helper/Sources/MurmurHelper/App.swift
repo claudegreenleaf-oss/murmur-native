@@ -128,6 +128,10 @@ final class HelperApp {
             let codes = ((payloadDict(value)["keycodes"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
             reply(.data("StaleKeysResponse", ["staleKeys": KeyTap.shared.staleKeys(codes)]))
 
+        case "GetBrowserTabInfo":
+            let pid = (payloadDict(value)["processId"] as? NSNumber)?.int32Value ?? 0
+            axQueue.async { reply(.data("BrowserTabInfo", readBrowserTabInfo(pid: pid))) }
+
         case "GetSystemAudioStatus":
             reply(.data("SystemAudioStatus", SystemAudio.status()))
 
