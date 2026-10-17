@@ -32,12 +32,20 @@ private func axSize(_ el: AXUIElement, _ attr: String) -> CGSize? {
     return AXValueGetValue(av, .cgSize, &s) ? s : nil
 }
 
-private func axSetFrame(_ el: AXUIElement, _ r: CGRect) {
+private func closeRects(_ a: CGRect, _ b: CGRect, _ tol: CGFloat) -> Bool {
+    abs(a.minX - b.minX) <= tol && abs(a.minY - b.minY) <= tol
+        && abs(a.width - b.width) <= tol && abs(a.height - b.height) <= tol
+}
+
+@discardableResult
+private func axSetFrame(_ el: AXUIElement, _ r: CGRect) -> Bool {
     var size = r.size
     var origin = r.origin
+    var ok = true
     if let sv = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(el, "AXSize" as CFString, sv) }
-    if let pv = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(el, "AXPosition" as CFString, pv) }
-    if let sv = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(el, "AXSize" as CFString, sv) }
+    if let pv = AXValueCreate(.cgPoint, &origin) { ok = AXUIElementSetAttributeValue(el, "AXPosition" as CFString, pv) == .success }
+    if let sv = AXValueCreate(.cgSize, &size), AXUIElementSetAttributeValue(el, "AXSize" as CFString, sv) != .success { ok = false }
+    return ok
 }
 
 /// Split-screen: the meeting app's window takes the left part of the work area, Murmur's recorder the right.
@@ -45,7 +53,9 @@ final class BrowserPositioner {
     static let shared = BrowserPositioner()
 
     private var placed: [pid_t: CGRect] = [:]
+    private var inFlight = 0
     private let lock = NSLock()
+    private let settleQueue = DispatchQueue(label: "murmur.helper.browserposition.settle")
 
     /// Failures are retryable unless Accessibility is missing.
     private func fail(_ retryable: Bool) -> JSON {
@@ -67,9 +77,8 @@ final class BrowserPositioner {
             hlog("Browser window resize skipped: not Accessibility-trusted")
             return fail(false)
         }
-        // Exact match on the localized name, then on the bundle identifier (no fuzzy matching).
-        let running = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
-        var apps = running.filter { $0.localizedName == name }
+        // First running app (any activation policy) whose localized name equals browserName exactly.
+        let apps = NSWorkspace.shared.runningApplications.filter { $0.localizedName == name }.prefix(1).map { $0 }
         if apps.isEmpty { apps = running.filter { $0.bundleIdentifier == name } }
         apps.sort { ($0.isActive ? 0 : 1) < ($1.isActive ? 0 : 1) }
         if apps.isEmpty {
@@ -115,37 +124,43 @@ final class BrowserPositioner {
             if already { r["alreadyPlaced"] = true }
             return r
         }
-        func close(_ a: CGRect, _ b: CGRect, _ tol: CGFloat) -> Bool {
-            abs(a.minX - b.minX) <= tol && abs(a.minY - b.minY) <= tol
-                && abs(a.width - b.width) <= tol && abs(a.height - b.height) <= tol
-        }
 
         let pid = app.processIdentifier
         lock.lock()
         let last = placed[pid]
+        let pending = inFlight
         lock.unlock()
 
         // Only resplitIfMoved short-circuits: the window is left alone while it is within 2 pt of the
         // split frame or of the frame the helper last gave it (same process). awaitWindow and split always place.
         if mode == "resplitIfMoved" {
-            if close(current, browser, 2) { return result(already: true) }
-            if let l = last, close(current, l, 2) { return result(already: true) }
+            if pending > 0 { return result(already: true) } // an earlier placement is still settling
+            if closeRects(current, browser, 2) { return result(already: true) }
+            if let l = last, closeRects(current, l, 2) { return result(already: true) }
         }
 
         AXUIElementPerformAction(win, "AXRaise" as CFString)
-        axSetFrame(win, browser)
-        sleepMs(60)
-        let np = axPoint(win, "AXPosition")
-        let ns = axSize(win, "AXSize")
-        guard let np, let ns else { return fail(true) }
-        let now = CGRect(origin: np, size: ns)
-        if close(now, current, 1) && !close(now, browser, 8) {
-            hlog("AX browser window frame not applied")
+        guard axSetFrame(win, browser) else {
+            hlog("AX browser window resize failed")
             return fail(true)
         }
+        // The frame the window really ends up with is recorded shortly after, off this call; until then
+        // a resplitIfMoved request counts the placement as still in flight.
         lock.lock()
-        placed[pid] = now
+        inFlight += 1
         lock.unlock()
+        settleQueue.asyncAfter(deadline: .now() + .milliseconds(80)) { [self] in
+            let np = axPoint(win, "AXPosition")
+            let ns = axSize(win, "AXSize")
+            lock.lock()
+            inFlight -= 1
+            if let np, let ns {
+                let now = CGRect(origin: np, size: ns)
+                placed[pid] = now
+                if !closeRects(now, browser, 8) { hlog("AX browser window frame not applied") }
+            }
+            lock.unlock()
+        }
         return result(already: false)
     }
 }
@@ -176,21 +191,32 @@ final class DockMonitor {
         hlog("Stopping DockWindowObserver")
     }
 
+    /// True while the Cmd+Tab switcher is up: the Dock then owns an extra overlay window ahead of its own.
+    private static func switcherVisible(dockPid: pid_t) -> Bool {
+        let app = axAppElement(dockPid)
+        for child in axChildren(app) where axStr(child, axaSubrole) == "AXProcessSwitcherList" { return true }
+        return false
+    }
+
     static func info() -> (visible: Bool, x: Int, y: Int) {
         // kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
         let opts = CGWindowListOption(rawValue: 17)
         guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
             return (false, 0, 0)
         }
-        var union: CGRect?
+        var rects: [CGRect] = []
+        var dockPid: pid_t?
         for w in list where (w["kCGWindowOwnerName"] as? String) == "Dock" {
+            if dockPid == nil, let p = w["kCGWindowOwnerPID"] as? Int { dockPid = pid_t(p) }
             guard let b = w["kCGWindowBounds"] as? NSDictionary,
-                  let r = CGRect(dictionaryRepresentation: b as CFDictionary),
-                  r.width > 0, r.height > 0 else { continue }
-            union = union.map { $0.union(r) } ?? r
+                  let r = CGRect(dictionaryRepresentation: b as CFDictionary) else { continue }
+            rects.append(r)
         }
-        guard let u = union else { return (false, 0, 0) }
-        return (true, Int(u.minX), Int(u.minY))
+        // First Dock window in z-order, skipping the switcher overlay when it is showing.
+        let index = (dockPid.map(switcherVisible) ?? false) ? 1 : 0
+        guard index < rects.count else { return (false, 0, 0) }
+        let r = rects[index]
+        return (true, Int(r.minX), Int(r.minY))
     }
 
     private func tick() {
