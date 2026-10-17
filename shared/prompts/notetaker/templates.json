@@ -1,0 +1,61 @@
+{
+  "general": {
+    "label": "General",
+    "hint": "Overview, Decisions, Next Steps."
+  },
+  "one_on_one": {
+    "label": "1:1",
+    "hint": "Structure the body as: Overview; Updates (what each person reported); Feedback and Concerns; Decisions; Next Steps. Keep each person's updates under their name.",
+    "sections": [
+      "Overview",
+      "Updates",
+      "Feedback and Concerns",
+      "Decisions",
+      "Next Steps"
+    ]
+  },
+  "standup": {
+    "label": "Standup",
+    "hint": "Structure the body as: Overview (one line); one section per person with Done, Doing, Blocked; Next Steps. Skip people who did not speak.",
+    "sections": [
+      "Overview",
+      "Per person: Done / Doing / Blocked",
+      "Next Steps"
+    ]
+  },
+  "interview": {
+    "label": "Interview",
+    "hint": "Structure the body as: Overview (role and candidate if stated); Background; Strengths; Concerns; Notable answers (question and answer in one line each); Next Steps. Do not make a hire recommendation unless one was stated.",
+    "sections": [
+      "Overview",
+      "Background",
+      "Strengths",
+      "Concerns",
+      "Notable answers",
+      "Next Steps"
+    ]
+  },
+  "sales_call": {
+    "label": "Sales call",
+    "hint": "Structure the body as: Overview; Customer needs and pain points; Objections; Budget, timeline and decision makers (only what was stated); Decisions; Next Steps.",
+    "sections": [
+      "Overview",
+      "Needs and pain points",
+      "Objections",
+      "Budget, timeline and decision makers",
+      "Decisions",
+      "Next Steps"
+    ]
+  },
+  "lecture": {
+    "label": "Lecture",
+    "hint": "Structure the body as: Overview (topic and speaker); Key concepts (term and one-line definition); Examples and evidence; Questions raised; Takeaways. Decisions and Next Steps only if the session had any.",
+    "sections": [
+      "Overview",
+      "Key concepts",
+      "Examples and evidence",
+      "Questions raised",
+      "Takeaways"
+    ]
+  }
+}

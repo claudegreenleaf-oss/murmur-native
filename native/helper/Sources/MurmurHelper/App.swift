@@ -41,11 +41,13 @@ final class HelperApp {
         case "StartAllIntervals":
             SecureInputMonitor.shared.start()
             HardwareMonitor.shared.start()
+            DockMonitor.shared.start()
             reply(.ack)
 
         case "StopAllIntervals":
             SecureInputMonitor.shared.stop()
             HardwareMonitor.shared.stop()
+            DockMonitor.shared.stop()
             reply(.ack)
 
         case "SetSecureInputMonitor":
@@ -127,6 +129,16 @@ final class HelperApp {
         case "CheckStaleKeys":
             let codes = ((payloadDict(value)["keycodes"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
             reply(.data("StaleKeysResponse", ["staleKeys": KeyTap.shared.staleKeys(codes)]))
+
+        case "PositionBrowserWindow":
+            let p = payloadDict(value)
+            let name = p["browserName"] as? String ?? ""
+            let mode = p["mode"] as? String ?? "split"
+            let minW = (p["recorderMinWidth"] as? NSNumber)?.doubleValue ?? 500
+            let frac = (p["recorderWidthFraction"] as? NSNumber)?.doubleValue ?? 0.3
+            axQueue.async {
+                reply(.data("BrowserWindowPositioned", BrowserPositioner.shared.position(name: name, mode: mode, minWidth: minW, fraction: frac)))
+            }
 
         case "GetBrowserTabInfo":
             let pid = (payloadDict(value)["processId"] as? NSNumber)?.int32Value ?? 0

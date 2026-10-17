@@ -66,3 +66,7 @@ func editDistance(_ a: String, _ b: String) -> Int {
 func truncatedJSONString(_ s: String, _ max: Int) -> String {
     s.count <= max ? s : String(s.prefix(max))
 }
+
+func onMain<T>(_ f: () -> T) -> T {
+    Thread.isMainThread ? f() : DispatchQueue.main.sync(execute: f)
+}
