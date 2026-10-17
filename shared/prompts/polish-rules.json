@@ -1,0 +1,19 @@
+{
+  "_doc": "Polish toggle semantics shared by both engines. mode_toggles is used when no custom prompt is sent; mode_custom replaces it when custom_prompt is present (the toggles are then ignored). Placeholders in polish-system.txt: {{MODE}} {{RULES}} {{VOICE}}. Unknown custom toggle labels are appended verbatim as an extra rule.",
+  "mode_toggles": "Apply exactly the rules listed below, and only those. Rules that are not listed must not be applied.",
+  "mode_custom": "Apply the user prompt below to the text. It replaces any default polishing rules; follow it exactly and change nothing else.",
+  "rules_header": "Rules:",
+  "custom_header": "User prompt:",
+  "extra_rule_prefix": "Also: ",
+  "toggles": {
+    "Make more concise": "Make it more concise: cut filler, repetition, hedging and words that add nothing, without dropping any point.",
+    "Reword for clarity": "Reword for clarity: replace vague, clumsy or ambiguous phrasing with plain, precise wording.",
+    "Reorder for readability": "Reorder for readability: move sentences or ideas so the text flows logically, context first and conclusions after.",
+    "Add structure for readability": "Add structure for readability: split long blocks into short paragraphs, and turn enumerations of three or more parallel items into a list.",
+    "Maintain your tone": "Maintain the tone: keep the register, warmth and personality of the original wording; do not make it stiffer or more casual.",
+    "Clarify main point": "Clarify the main point: make the central message or request unmistakable, stating it early.",
+    "Refine phrasing for impact": "Refine phrasing for impact: use stronger, more vivid and more direct wording and active verbs."
+  },
+  "prompt_engineer": "Turn the text into a clean, well-structured prompt for an AI assistant. Infer the role the assistant should take, the task, the key points and constraints, the audience, and the desired output format and tone from the text. Use short labeled sections such as Role, Task, Context, Requirements and Output format, and include only the sections the text supports. Do not answer the prompt, and do not add requirements the text does not imply.",
+  "voice_block": "6. Match the writing style shown in these samples by the same author (vocabulary, sentence length, punctuation habits). Never copy their content:\n{{SAMPLES}}"
+}

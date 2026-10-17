@@ -10,6 +10,7 @@ on:
 
 jobs:
   build:
+    if: github.repository == 'claudegreenleaf-oss/murmur-native'
     runs-on: macos-26
     timeout-minutes: 45
     steps:
@@ -27,6 +28,7 @@ jobs:
           cp shared/prompts/format-system.txt shared/prompts/command-system.txt \
              shared/prompts/extract-edited-words-system.txt shared/prompts/format-fragments.json \
              shared/prompts/format-request.md \
+             shared/prompts/polish-system.txt shared/prompts/polish-rules.json \
              native/engine/Sources/MurmurEngine/Resources/prompts/
           ls -la native/engine/Sources/MurmurEngine/Resources/prompts
 

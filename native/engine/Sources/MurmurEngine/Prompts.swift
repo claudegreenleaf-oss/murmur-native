@@ -12,7 +12,7 @@ struct Prompts {
 
     static let shared: Prompts = Prompts.load()
 
-    private static func text(_ name: String, _ ext: String) -> String {
+    static func text(_ name: String, _ ext: String) -> String {
         let urls = [
             Bundle.module.url(forResource: name, withExtension: ext, subdirectory: "prompts"),
             Bundle.module.url(forResource: name, withExtension: ext),

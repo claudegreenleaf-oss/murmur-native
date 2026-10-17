@@ -47,6 +47,10 @@ final class Engine: @unchecked Sendable {
         }
     }
 
+    func handlePolish(_ body: JSON) async -> JSON {
+        await Polish.run(body)
+    }
+
     func handleExtract(_ body: JSON) async -> JSON {
         let potential = body.strs("potential_words")
         var cands: [(word: String, source: String)] = []

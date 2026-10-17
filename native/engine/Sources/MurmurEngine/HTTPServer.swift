@@ -171,6 +171,11 @@ final class ClientConnection: @unchecked Sendable {
                 let out = await engine.handleFormat(parseJSON(req.body) ?? [:])
                 self.respond(status: 200, json: out)
             }
+        case ("POST", "/v1/polish"):
+            Task {
+                let out = await engine.handlePolish(parseJSON(req.body) ?? [:])
+                self.respond(status: 200, json: out)
+            }
         case ("POST", "/v1/command"):
             Task {
                 let out = await engine.handleCommand(parseJSON(req.body) ?? [:])
