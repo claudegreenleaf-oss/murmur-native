@@ -128,6 +128,48 @@ final class HelperApp {
             let codes = ((payloadDict(value)["keycodes"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
             reply(.data("StaleKeysResponse", ["staleKeys": KeyTap.shared.staleKeys(codes)]))
 
+        case "GetSystemAudioStatus":
+            reply(.data("SystemAudioStatus", SystemAudio.status()))
+
+        case "RequestSystemAudioPermission":
+            guard #available(macOS 14.4, *) else { return reply(.data("SystemAudioPromptResult", ["result": "unavailable"])) }
+            SystemAudioTap.shared.triggerPrompt { reply(.data("SystemAudioPromptResult", ["result": $0])) }
+
+        case "StartSystemAudioCapture":
+            guard #available(macOS 14.4, *) else { return reply(.error("macOS 14.4 or newer required", "UNSUPPORTED_OS")) }
+            let p = payloadDict(value)
+            let prefixes = (p["excludeBundleIdPrefixes"] as? [String]) ?? ["com.thomasgreenleaf.murmur"]
+            let pids = ((p["excludePids"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
+            SystemAudioTap.shared.start(prefixes: prefixes, pids: pids) { err in
+                if let err { reply(.error("System audio capture failed: \(err)", "SYSTEM_AUDIO_START_FAILED")) } else { reply(.ack) }
+            }
+
+        case "StopSystemAudioCapture":
+            guard #available(macOS 14.4, *) else { return reply(.ack) }
+            SystemAudioTap.shared.stop { reply(.ack) }
+
+        case "SetMicrophoneHoldersMonitor":
+            guard #available(macOS 14.4, *) else { return reply(.error("macOS 14.4 or newer required", "UNSUPPORTED_OS")) }
+            let p = payloadDict(value)
+            MicHoldersMonitor.shared.set(enabled: (p["enabled"] as? Bool) ?? false, cadenceMs: (p["cadenceMs"] as? NSNumber)?.intValue)
+            reply(.ack)
+
+        case "GetMicrophoneHolders":
+            guard #available(macOS 14.4, *) else { return reply(.error("macOS 14.4 or newer required", "UNSUPPORTED_OS")) }
+            axQueue.async { reply(.data("MicrophoneHolders", MicHoldersMonitor.shared.snapshot())) }
+
+        case "GetCalendarAccessStatus":
+            reply(.data("CalendarAccessStatus", ["status": CalendarBridge.shared.status()]))
+
+        case "RequestCalendarAccess":
+            CalendarBridge.shared.requestAccess { reply(.data("CalendarAccessStatus", ["status": $0])) }
+
+        case "GetCalendarEvents":
+            let p = payloadDict(value)
+            let from = (p["fromMs"] as? NSNumber)?.doubleValue ?? 0
+            let to = (p["toMs"] as? NSNumber)?.doubleValue ?? 0
+            axQueue.async { reply(.data("CalendarEvents", CalendarBridge.shared.events(fromMs: from, toMs: to))) }
+
         default:
             reply(.error("No handler registered for \(name)", "NO_HANDLER_REGISTERED"))
         }

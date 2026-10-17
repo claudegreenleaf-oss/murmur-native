@@ -31,6 +31,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSAudioCaptureUsageDescription</key><string>Murmur records meeting audio from your Mac so it can take notes.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key><string>Murmur reads your calendar to show upcoming meetings and link notes to them.</string>
+    <key>NSCalendarsUsageDescription</key><string>Murmur reads your calendar to show upcoming meetings and link notes to them.</string>
 </dict>
 </plist>
 PLIST
