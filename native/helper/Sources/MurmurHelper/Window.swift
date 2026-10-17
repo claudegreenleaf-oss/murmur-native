@@ -79,8 +79,6 @@ final class BrowserPositioner {
         }
         // First running app (any activation policy) whose localized name equals browserName exactly.
         let apps = NSWorkspace.shared.runningApplications.filter { $0.localizedName == name }.prefix(1).map { $0 }
-        if apps.isEmpty { apps = running.filter { $0.bundleIdentifier == name } }
-        apps.sort { ($0.isActive ? 0 : 1) < ($1.isActive ? 0 : 1) }
         if apps.isEmpty {
             hlog("Browser window resize skipped: no running app matches requested browser name")
             return fail(true)
