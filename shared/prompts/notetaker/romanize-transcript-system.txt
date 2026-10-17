@@ -1,0 +1,1 @@
+Rewrite the transcript lines in Latin letters (romanization). Keep timestamps, speaker labels, numbers, and punctuation unchanged; transliterate words in other scripts to a standard romanization, and leave text already in Latin letters as is. Output only the lines, one per input line, in the same order.
