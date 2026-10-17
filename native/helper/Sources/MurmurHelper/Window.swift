@@ -47,14 +47,16 @@ final class BrowserPositioner {
     private var placed: [pid_t: CGRect] = [:]
     private let lock = NSLock()
 
+    /// Failures are retryable unless Accessibility is missing.
     private func fail(_ retryable: Bool) -> JSON {
-        ["browserAnchored": false, "retryable": retryable]
+        ["browserAnchored": false, "retryable": retryable && AXIsProcessTrusted()]
     }
 
-    private func standardWindow(_ ael: AXUIElement) -> AXUIElement? {
+    private func standardWindow(_ ael: AXUIElement, requiredIdentifier: String?) -> AXUIElement? {
         let wins = (axCopy(ael, "AXWindows") as? [AXUIElement]) ?? []
         let std = wins.filter { w in
             axStr(w, axaSubrole) == "AXStandardWindow" && (axCopy(w, "AXMinimized") as? Bool) != true
+                && (requiredIdentifier == nil || axStr(w, "AXIdentifier") == requiredIdentifier)
         }
         if let f = axElem(ael, axaFocusedWindow), std.contains(where: { CFEqual($0, f) }) { return f }
         return std.first
@@ -65,13 +67,11 @@ final class BrowserPositioner {
             hlog("Browser window resize skipped: not Accessibility-trusted")
             return fail(false)
         }
-        let needle = name.lowercased()
-        let apps = NSWorkspace.shared.runningApplications.filter { a in
-            guard a.activationPolicy == .regular else { return false }
-            let n = a.localizedName?.lowercased() ?? ""
-            let b = a.bundleIdentifier?.lowercased() ?? ""
-            return n == needle || b == needle || (!needle.isEmpty && (n.contains(needle) || b.contains(needle)))
-        }.sorted { ($0.isActive ? 0 : 1) < ($1.isActive ? 0 : 1) }
+        // Exact match on the localized name, then on the bundle identifier (no fuzzy matching).
+        let running = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+        var apps = running.filter { $0.localizedName == name }
+        if apps.isEmpty { apps = running.filter { $0.bundleIdentifier == name } }
+        apps.sort { ($0.isActive ? 0 : 1) < ($1.isActive ? 0 : 1) }
         if apps.isEmpty {
             hlog("Browser window resize skipped: no running app matches requested browser name")
             return fail(true)
@@ -79,7 +79,9 @@ final class BrowserPositioner {
         var found: (NSRunningApplication, AXUIElement)?
         for a in apps {
             AppKinds.ensureAccessibility(a)
-            if let w = standardWindow(axAppElement(a.processIdentifier)) {
+            // Zoom has several standard windows; only the meeting window counts.
+            let required = a.bundleIdentifier == "us.zoom.xos" ? "zm.meeting.window.main" : nil
+            if let w = standardWindow(axAppElement(a.processIdentifier), requiredIdentifier: required) {
                 found = (a, w)
                 break
             }
@@ -87,10 +89,6 @@ final class BrowserPositioner {
         guard let (app, win) = found else {
             hlog("Browser window resize skipped: no standard window")
             return fail(true)
-        }
-        if (axCopy(win, "AXFullScreen") as? Bool) == true {
-            hlog("fullscreen_skipped")
-            return fail(false)
         }
         guard let pos = axPoint(win, "AXPosition"), let size = axSize(win, "AXSize") else { return fail(true) }
         let current = CGRect(origin: pos, size: size)
@@ -111,8 +109,8 @@ final class BrowserPositioner {
         func result(already: Bool) -> JSON {
             var r: JSON = [
                 "browserAnchored": true,
-                "recorderX": Int(recorder.minX.rounded()), "recorderY": Int(recorder.minY.rounded()),
-                "recorderWidth": Int(recorder.width.rounded()), "recorderHeight": Int(recorder.height.rounded()),
+                "recorderX": Int(recorder.minX), "recorderY": Int(recorder.minY),
+                "recorderWidth": Int(recorder.width), "recorderHeight": Int(recorder.height),
             ]
             if already { r["alreadyPlaced"] = true }
             return r
@@ -127,17 +125,14 @@ final class BrowserPositioner {
         let last = placed[pid]
         lock.unlock()
 
-        switch mode {
-        case "awaitWindow":
-            if close(current, browser, 8) { return result(already: true) }
-        case "resplitIfMoved":
-            // Only act when the user moved the window away from where we put it.
-            if let l = last, close(current, l, 8) { return result(already: true) }
-            if last == nil, close(current, browser, 8) { return result(already: true) }
-        default:
-            break
+        // Only resplitIfMoved short-circuits: the window is left alone while it is within 2 pt of the
+        // split frame or of the frame the helper last gave it (same process). awaitWindow and split always place.
+        if mode == "resplitIfMoved" {
+            if close(current, browser, 2) { return result(already: true) }
+            if let l = last, close(current, l, 2) { return result(already: true) }
         }
 
+        AXUIElementPerformAction(win, "AXRaise" as CFString)
         axSetFrame(win, browser)
         sleepMs(60)
         let np = axPoint(win, "AXPosition")
@@ -155,7 +150,9 @@ final class BrowserPositioner {
     }
 }
 
-/// Reports whether the Dock occupies screen space (a hidden Dock does not) and where it sits.
+/// Dock window geometry from the window server, polled like the original helper: first after 100 ms,
+/// then every 0.5 s, sending only on change. `isVisible` is false when no on-screen Dock window exists
+/// (hidden Dock); otherwise x and y are the top-left of the Dock's on-screen window bounds.
 final class DockMonitor {
     static let shared = DockMonitor()
 
@@ -165,41 +162,35 @@ final class DockMonitor {
     func start() {
         if timer != nil { return }
         let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "murmur.helper.dock"))
-        t.schedule(deadline: .now(), repeating: 1)
+        t.schedule(deadline: .now() + .milliseconds(100), repeating: 0.5)
         t.setEventHandler { [weak self] in self?.tick() }
         t.resume()
         timer = t
+        hlog("Starting to detect the dock position")
     }
 
     func stop() {
         timer?.cancel()
         timer = nil
         last = nil
+        hlog("Stopping DockWindowObserver")
     }
 
     static func info() -> (visible: Bool, x: Int, y: Int) {
-        let displays = DisplayGeometry.all()
-        var best: (inset: CGFloat, rect: CGRect)?
-        for d in displays {
-            let left = d.workArea.minX - d.frame.minX
-            let right = d.frame.maxX - d.workArea.maxX
-            let bottom = d.frame.maxY - d.workArea.maxY
-            let rect: CGRect
-            let inset: CGFloat
-            if bottom >= left && bottom >= right {
-                inset = bottom
-                rect = CGRect(x: d.workArea.minX, y: d.workArea.maxY, width: d.workArea.width, height: bottom)
-            } else if left >= right {
-                inset = left
-                rect = CGRect(x: d.frame.minX, y: d.workArea.minY, width: left, height: d.workArea.height)
-            } else {
-                inset = right
-                rect = CGRect(x: d.workArea.maxX, y: d.workArea.minY, width: right, height: d.workArea.height)
-            }
-            if inset > (best?.inset ?? 0) { best = (inset, rect) }
+        // kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
+        let opts = CGWindowListOption(rawValue: 17)
+        guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
+            return (false, 0, 0)
         }
-        if let b = best, b.inset > 0.5 { return (true, Int(b.rect.minX.rounded()), Int(b.rect.minY.rounded())) }
-        return (false, 0, 0)
+        var union: CGRect?
+        for w in list where (w["kCGWindowOwnerName"] as? String) == "Dock" {
+            guard let b = w["kCGWindowBounds"] as? NSDictionary,
+                  let r = CGRect(dictionaryRepresentation: b as CFDictionary),
+                  r.width > 0, r.height > 0 else { continue }
+            union = union.map { $0.union(r) } ?? r
+        }
+        guard let u = union else { return (false, 0, 0) }
+        return (true, Int(u.minX), Int(u.minY))
     }
 
     private func tick() {
