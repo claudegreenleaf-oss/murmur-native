@@ -18,6 +18,8 @@ final class SpeakerPoller {
     private struct Tile {
         var names: [String] = []
         var speaking = false
+        var muted = false
+        var isSelf = false
     }
 
     private let queue = DispatchQueue(label: "murmur.helper.speakers", qos: .userInitiated)
@@ -86,27 +88,75 @@ final class SpeakerPoller {
         return []
     }
 
+    // Label predicates found in the reference helper: a label counts as a speaking indicator when its
+    // lowercased text contains "talking", "speaking" or "active speaker"; it counts as muted when it
+    // contains "muted" without being "unmuted".
+    private func isSpeakingLabel(_ l: String) -> Bool {
+        let t = l.lowercased()
+        return t.contains("talking") || t.contains("speaking") || t.contains("active speaker")
+    }
+
+    private func isMutedLabel(_ l: String) -> Bool {
+        let t = l.lowercased()
+        return t.contains("muted") && !t.contains("unmuted")
+    }
+
+    private static let overflowRegex = try? NSRegularExpression(pattern: #"^\+?\d+\s+(more|others?|participants?)$"#, options: [.caseInsensitive])
+    private static let timerRegex = try? NSRegularExpression(pattern: #"\d:\d\d"#)
+    private static let pageRegex = try? NSRegularExpression(pattern: #"\d+\s*/\s*\d+\s*$"#)
+    private static let trailingParen = try? NSRegularExpression(pattern: #"\s*\([^()]*\)\s*$"#)
+
+    private func matches(_ re: NSRegularExpression?, _ s: String) -> Bool {
+        guard let re else { return false }
+        return re.firstMatch(in: s, range: NSRange(location: 0, length: (s as NSString).length)) != nil
+    }
+
+    /// True when the label is chrome rather than a participant name.
+    private func isNoise(_ l: String) -> Bool {
+        let t = l.lowercased()
+        if t.isEmpty || t.count > 80 { return true }
+        if isSpeakingLabel(t) || t.contains("muted") || t.contains("video") || t.contains("camera") { return true }
+        if matches(SpeakerPoller.overflowRegex, l) || matches(SpeakerPoller.timerRegex, l) || matches(SpeakerPoller.pageRegex, l) { return true }
+        return ["pin", "more actions", "presenting", "you are speaking"].contains(t)
+    }
+
+    private func isSelfLabel(_ l: String) -> Bool {
+        let t = l.lowercased()
+        return t.contains("(you)") || t.hasPrefix("you,") || t == "you"
+    }
+
+    /// Display name from a tile label: first comma part, no "(You)" or trailing parenthetical.
+    private func cleanName(_ l: String) -> String {
+        var n = l.components(separatedBy: ",").first ?? l
+        n = n.replacingOccurrences(of: "(you)", with: "", options: .caseInsensitive)
+        if let re = SpeakerPoller.trailingParen {
+            n = re.stringByReplacingMatches(in: n, range: NSRange(location: 0, length: (n as NSString).length), withTemplate: "")
+        }
+        return n.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func tick() {
-        guard AXIsProcessTrusted() else { return emit(state: "unknown", speaking: [], reason: "read_failed", names: nil, selfName: nil) }
+        guard AXIsProcessTrusted() else { return emit(state: "unknown", speaking: [], reason: "read_failed", muted: nil, selfName: nil) }
         guard let app = targetApp() else {
-            return emit(state: "unknown", speaking: [], reason: "source_missing", names: nil, selfName: nil)
+            return emit(state: "unknown", speaking: [], reason: "source_missing", muted: nil, selfName: nil)
         }
         AppKinds.ensureAccessibility(app)
         let ael = axAppElement(app.processIdentifier)
         let windows = (axCopy(ael, "AXWindows") as? [AXUIElement]) ?? []
         if windows.isEmpty {
-            return emit(state: "unknown", speaking: [], reason: "source_hidden", names: nil, selfName: nil)
+            return emit(state: "unknown", speaking: [], reason: "source_hidden", muted: nil, selfName: nil)
         }
-        if config.platform == "zoom" {
-            // Native Zoom exposes no indicator we can read reliably.
-            return emit(state: "unknown", speaking: [], reason: "indicator_unavailable", names: nil, selfName: nil)
-        }
-
-        let attrs = ["AXDOMClassList", axaValue, axaTitle, axaDesc, axaChildren, "AXVisibleChildren"]
+        let isZoom = config.platform == "zoom"
+        let attrs = ["AXDOMClassList", axaDesc, axaTitle, axaValue, axaChildren, "AXVisibleChildren"]
         var tiles: [Tile] = []
+        var labelsByTile: [[String]] = []
         var budget = 4000
         let deadline = monoMs() + 250
         var timedOut = false
+
+        func labels(_ v: [CFTypeRef?]) -> [String] {
+            (1...3).compactMap { v[$0] as? String }.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        }
 
         // Depth-first walk; tileIndex is the tile the current node sits in.
         func walk(_ el: AXUIElement, _ tileIndex: Int?, _ depth: Int) {
@@ -117,20 +167,26 @@ final class SpeakerPoller {
             budget -= 1
             let v = axMulti(el, attrs)
             let cls = classes(v[0])
+            let ls = labels(v)
             var idx = tileIndex
-            if !cls.isEmpty, config.tiles.contains(where: { cls.contains($0) }) {
+            if isZoom {
+                // A Zoom participant tile announces its audio state: "<name>, Computer audio (un)muted, ...".
+                if ls.contains(where: { $0.lowercased().contains("audio muted") || $0.lowercased().contains("audio unmuted") }) {
+                    tiles.append(Tile())
+                    labelsByTile.append([])
+                    idx = tiles.count - 1
+                }
+            } else if !cls.isEmpty, config.tiles.contains(where: { cls.contains($0) }) {
                 tiles.append(Tile())
+                labelsByTile.append([])
                 idx = tiles.count - 1
             }
             if let i = idx {
                 if !cls.isEmpty, config.markers.contains(where: { cls.contains($0) }) { tiles[i].speaking = true }
-                if config.collectNames {
-                    for k in 1...3 {
-                        if let s = v[k] as? String {
-                            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !t.isEmpty && t.count <= 80 && !tiles[i].names.contains(t) { tiles[i].names.append(t) }
-                        }
-                    }
+                for l in ls {
+                    if isSpeakingLabel(l) { tiles[i].speaking = true }
+                    if isMutedLabel(l) { tiles[i].muted = true }
+                    if !labelsByTile[i].contains(l) { labelsByTile[i].append(l) }
                 }
             }
             if depth > 40 { return }
@@ -140,29 +196,32 @@ final class SpeakerPoller {
         for w in windows { walk(w, nil, 0) }
 
         if tiles.isEmpty {
-            return emit(state: "unknown", speaking: [], reason: timedOut ? "partial_tree" : "source_missing", names: nil, selfName: nil)
+            let reason = isZoom ? "indicator_unavailable" : (timedOut ? "partial_tree" : "source_missing")
+            return emit(state: "unknown", speaking: [], reason: reason, muted: nil, selfName: nil)
         }
-        func label(_ t: Tile) -> String? {
-            // First short text that is not a status word.
-            let skip: Set<String> = ["muted", "unmuted", "pin", "more actions", "presenting"]
-            return t.names.first { !skip.contains($0.lowercased()) }
-        }
-        let speakingTiles = tiles.filter { $0.speaking }
-        let names = speakingTiles.compactMap(label)
-        var selfName: String?
-        for t in tiles {
-            if let l = label(t), t.names.contains(where: { $0.lowercased() == "you" || $0.lowercased().hasSuffix("(you)") }) {
-                selfName = l.replacingOccurrences(of: " (You)", with: "")
-                break
+        for i in tiles.indices {
+            let ls = labelsByTile[i]
+            // Zoom: the label that carries the audio state also carries the name.
+            let nameLabel = isZoom
+                ? ls.first(where: { $0.lowercased().contains("audio") })
+                : ls.first(where: { !isNoise($0) })
+            if let nl = nameLabel {
+                tiles[i].isSelf = isSelfLabel(nl)
+                let n = cleanName(nl)
+                if !n.isEmpty { tiles[i].names = [n] }
             }
         }
+        let speakingTiles = tiles.filter { $0.speaking }
+        let speakingNames = speakingTiles.compactMap { $0.names.first }
+        let mutedNames = tiles.filter { $0.muted }.compactMap { $0.names.first }
+        let selfName = tiles.first(where: { $0.isSelf })?.names.first
         let state = speakingTiles.count == 1 ? "matched" : (speakingTiles.count > 1 ? "ambiguous" : "unknown")
-        emit(state: state, speaking: names, reason: speakingTiles.isEmpty ? "indicator_unavailable" : (timedOut ? "partial_coverage" : nil),
-             names: nil, selfName: selfName)
+        emit(state: state, speaking: speakingNames, reason: speakingTiles.isEmpty ? "indicator_unavailable" : (timedOut ? "partial_coverage" : nil),
+             muted: mutedNames, selfName: selfName)
     }
 
-    private func emit(state: String, speaking: [String], reason: String?, names: [String]?, selfName: String?) {
-        let key = "\(state)|\(speaking.joined(separator: ","))|\(selfName ?? "")|\(reason ?? "")"
+    private func emit(state: String, speaking: [String], reason: String?, muted: [String]?, selfName: String?) {
+        let key = "\(state)|\(speaking.joined(separator: ","))|\((muted ?? []).joined(separator: ","))|\(selfName ?? "")|\(reason ?? "")"
         if key == lastKey { return }
         lastKey = key
         var p: JSON = [
@@ -174,6 +233,7 @@ final class SpeakerPoller {
             "selfName": selfName ?? NSNull(),
             "source": source(),
         ]
+        if let m = muted { p["mutedNames"] = m }
         if let first = speaking.first, state == "matched" { p["speakerName"] = first }
         if let r = reason, state != "matched" { p["reason"] = r }
         IPC.shared.send("MeetingSpeakerChange", p)
