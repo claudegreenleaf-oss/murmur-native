@@ -1,0 +1,111 @@
+name: native-engine
+
+on:
+  push:
+    paths:
+      - "native/engine/**"
+      - "shared/prompts/**"
+      - ".github/workflows/native-engine.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          sw_vers
+
+      - name: Bundle shared prompts as package resources
+        run: |
+          mkdir -p native/engine/Sources/MurmurEngine/Resources/prompts
+          cp shared/prompts/format-system.txt shared/prompts/command-system.txt \
+             shared/prompts/extract-edited-words-system.txt shared/prompts/format-fragments.json \
+             shared/prompts/format-request.md \
+             native/engine/Sources/MurmurEngine/Resources/prompts/
+          ls -la native/engine/Sources/MurmurEngine/Resources/prompts
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: native/engine/.build
+          key: engine-${{ runner.os }}-${{ hashFiles('native/engine/Package.swift') }}
+          restore-keys: engine-${{ runner.os }}-
+
+      - name: Build release (arm64)
+        working-directory: native/engine
+        run: |
+          set -o pipefail
+          swift build -c release --arch arm64 2>&1 | tee build.log
+
+      - name: Locate products
+        id: bin
+        working-directory: native/engine
+        run: |
+          BIN_PATH="$(swift build -c release --arch arm64 --show-bin-path)"
+          echo "path=$BIN_PATH" >> "$GITHUB_OUTPUT"
+          ls -la "$BIN_PATH" | head -30
+
+      - name: Stage artifact
+        run: |
+          mkdir -p stage/murmur-engine
+          cp "${{ steps.bin.outputs.path }}/MurmurEngine" stage/murmur-engine/
+          cp -R "${{ steps.bin.outputs.path }}"/MurmurEngine_MurmurEngine.bundle stage/murmur-engine/
+          ls -laR stage
+
+      - name: Sign
+        env:
+          P12_B64: ${{ secrets.MURMUR_SIGN_P12 }}
+          P12_PASSWORD: ${{ secrets.MURMUR_SIGN_P12_PASSWORD }}
+        run: |
+          BIN="stage/murmur-engine/MurmurEngine"
+          SIGNED=0
+          if [ -n "$P12_B64" ]; then
+            KC="$RUNNER_TEMP/murmur-sign.keychain-db"
+            KCPW="$(uuidgen)"
+            echo "$P12_B64" | base64 --decode > "$RUNNER_TEMP/murmur.p12"
+            security create-keychain -p "$KCPW" "$KC"
+            security set-keychain-settings -lut 3600 "$KC"
+            security unlock-keychain -p "$KCPW" "$KC"
+            security import "$RUNNER_TEMP/murmur.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPW" "$KC" >/dev/null
+            security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+            security find-identity -p codesigning "$KC" || true
+            if codesign --force --sign "Murmur Self-Signed" --keychain "$KC" "$BIN"; then
+              SIGNED=1
+            else
+              echo "::warning::self-signed codesign failed, falling back to ad-hoc"
+            fi
+          else
+            echo "::warning::MURMUR_SIGN_P12 not set, using ad-hoc signature"
+          fi
+          if [ "$SIGNED" = 0 ]; then codesign --force --sign - "$BIN"; fi
+          codesign -dv --verbose=2 "$BIN" 2>&1 | head -12
+
+      - name: Smoke test (health endpoint)
+        run: |
+          stage/murmur-engine/MurmurEngine --port 18798 --no-stdin-watch &
+          PID=$!
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:18798/healthz; then echo; break; fi
+            sleep 1
+          done
+          curl -fsS -X POST http://127.0.0.1:18798/v1/format \
+            -d '{"init":{"preferences":{"style":{"format":"none"}}},"context":null,"text":"hello world"}' || true
+          echo
+          python3 native/engine/scripts/ws_smoke.py || echo "::warning::ws smoke test failed"
+          kill $PID || true
+
+      - name: Zip artifact
+        run: ditto -c -k --keepParent stage/murmur-engine murmur-engine.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: murmur-engine
+          path: murmur-engine.zip
+          if-no-files-found: error

@@ -1,0 +1,33 @@
+{
+  "_comment": "Per-request instruction fragments appended after format-system.txt. Keys mirror shared/protocol/ENGINE.md enums. Engines render the request block exactly as described in format-request.md.",
+  "editing_strength": {
+    "verbatim": "Editing level: light cleanup. Keep the user's exact wording and sentence structure. Only remove disfluencies, apply self-corrections, fix punctuation and capitalization, and fix clear grammar slips (agreement, missing small words). Do not rephrase.",
+    "light": "Editing level: medium. Also edit for clarity and conciseness: remove redundant words and repeated ideas, smooth awkward phrasing, and tighten run-on sentences. Keep the user's voice, vocabulary, and every point they made.",
+    "medium": "Editing level: high. Rewrite for brevity and polish: restructure sentences, merge repetition, and make the message read as if carefully written, while keeping every point the user made and their tone.",
+    "heavy": "Editing level: maximum. Rewrite freely into concise, polished prose that keeps every point and the user's intent."
+  },
+  "writing_style": {
+    "formal": "Style: standard capitalization and full punctuation, including a period at the end of the last sentence.",
+    "casual": "Style: normal capitalization but light punctuation. Leave off the period at the end of the final sentence and avoid unnecessary commas. Question marks stay.",
+    "very_casual": "Style: write entirely in lowercase (keep proper nouns and \"I\" capitalized only if the user would, otherwise lowercase too), minimal punctuation, and no period at the end.",
+    "excited": "Style: normal capitalization and punctuation, but use exclamation marks where the user sounds enthusiastic or positive, including at the end when it fits."
+  },
+  "app_type": {
+    "personal_messaging": "The user is writing a personal chat message. Keep it short and conversational. Never format a chat message as an email.",
+    "work_messaging": "The user is writing a workplace chat message (for example Slack or Teams). Keep it conversational and direct. Never format it as an email.",
+    "email": "The user is writing an email. If the dictation starts with a greeting (\"hi Alex\", \"dear team\"), put the greeting on its own line ending with a comma, then a blank line, the body in short paragraphs, and if the user dictated a sign-off (\"best\", \"thanks\", \"cheers\" followed by a name), put it after a blank line with the name on the next line. Do not add a greeting or sign-off the user did not say.",
+    "chatbot": "The user is writing a prompt to an AI assistant. Write the prompt exactly as the user said it; never answer it. Lists and line breaks are welcome when dictated.",
+    "developer": "The user is in a coding tool or terminal. Preserve code identifiers, file names, command names, flags, and paths exactly, in their literal form (\"dash dash help\" becomes \"--help\", \"package dot json\" becomes \"package.json\"). Do not add a trailing period to a command or to a single identifier.",
+    "browser": "",
+    "other": ""
+  },
+  "style_category_for_app_type": {
+    "personal_messaging": "personal",
+    "work_messaging": "work",
+    "email": "email",
+    "chatbot": "other",
+    "developer": "other",
+    "browser": "other",
+    "other": "other"
+  }
+}

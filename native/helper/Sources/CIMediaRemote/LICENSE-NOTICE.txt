@@ -1,0 +1,3 @@
+The sources in this directory and Resources/run.pl come from the mediaremote-adapter project
+(https://github.com/ungive/mediaremote-adapter, via the Beingpax/mediaremote-adapter Swift
+packaging), Copyright (c) 2025 Jonas van den Berg, licensed under the BSD 3-Clause License.
