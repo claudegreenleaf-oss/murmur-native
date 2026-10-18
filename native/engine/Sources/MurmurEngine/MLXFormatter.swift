@@ -91,7 +91,7 @@ final class MLXFormatter: @unchecked Sendable {
         let t = Task.detached(priority: .utility) { () -> ModelContainer in
             // Keep freed buffers from being hoarded by MLX's allocator cache.
             Memory.cacheLimit = 64 * 1024 * 1024
-            try await loadModelContainer(from: dir, using: LocalTokenizerLoader())
+            return try await loadModelContainer(from: dir, using: LocalTokenizerLoader())
         }
         loadTask = t
         return t
