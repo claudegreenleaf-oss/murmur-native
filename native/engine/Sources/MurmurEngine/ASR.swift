@@ -2,13 +2,15 @@ import Foundation
 import FluidAudio
 
 /// Parakeet TDT v3 (multilingual) on the Neural Engine via FluidAudio. Models live in
-/// ~/Library/Application Support/Murmur/models/ and stay loaded after first use.
+/// ~/Library/Application Support/Murmur/models/. Loaded when a dictation starts, released after an idle period.
 actor ASREngine {
     static let modelName = "parakeet-tdt-0.6b-v3"
 
     private var manager: AsrManager?
     private var loading: Task<AsrManager, Error>?
     private(set) var lastError: String?
+    private let idle = IdleUnloader()
+    private var inFlight = 0
 
     static func modelsDirectory() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -28,7 +30,18 @@ actor ASREngine {
         }
     }
 
+    /// Releases the models (Core ML / ANE memory). Returns false while loading or transcribing.
+    func unloadIfIdle() async -> Bool {
+        if inFlight > 0 || loading != nil { return false }
+        guard let m = manager else { return true }
+        manager = nil
+        await m.cleanup()
+        elog("Parakeet unloaded after idle")
+        return true
+    }
+
     private func ensureLoaded() async throws -> AsrManager {
+        idle.touch { [weak self] in await self?.unloadIfIdle() ?? true }
         if let m = manager { return m }
         if let l = loading { return try await l.value }
         let t = Task { () throws -> AsrManager in
@@ -59,6 +72,8 @@ actor ASREngine {
     /// Transcribes 16 kHz mono float samples. Returns "" on failure or silence.
     func transcribe(_ samples: [Float], language: String?) async -> String {
         guard !samples.isEmpty else { return "" }
+        inFlight += 1
+        defer { inFlight -= 1; idle.touch { [weak self] in await self?.unloadIfIdle() ?? true } }
         do {
             let m = try await ensureLoaded()
             var audio = samples

@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 import MLXLLM
 import MLXLMCommon
 import Tokenizers
@@ -40,9 +41,9 @@ private struct LocalTokenizerLoader: MLXLMCommon.TokenizerLoader {
     }
 }
 
-/// Local distilled formatter: an mlx-lm converted (4-bit) Qwen3 in
-/// ~/Library/Application Support/Murmur/models/formatter-mlx. Loaded once in the background and kept resident;
-/// requests are serialized and decoded greedily.
+/// Local distilled formatter: an mlx-lm converted (4-bit) Qwen3 (any size, same chat template) in
+/// ~/Library/Application Support/Murmur/models/formatter-mlx. Loaded lazily when a local dictation starts,
+/// unloaded after an idle period (see IdleUnloader); requests are serialized and decoded greedily.
 final class MLXFormatter: @unchecked Sendable {
     static let shared = MLXFormatter()
 
@@ -56,8 +57,9 @@ final class MLXFormatter: @unchecked Sendable {
     private var failed = false
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    private let idle = IdleUnloader()
 
-    /// True when a model directory is installed and has not failed to load.
+    /// True when a model directory is installed and has not failed to load (loaded or not).
     static var isAvailable: Bool { shared.available }
     /// True once the model is resident in memory.
     static var isLoaded: Bool { shared.isResident }
@@ -66,8 +68,9 @@ final class MLXFormatter: @unchecked Sendable {
         try await shared.generate(system: system, user: user, maxTokens: maxTokens)
     }
 
-    /// Loads the model and runs one tiny generation so the first dictation does not pay for kernel compilation.
-    static func warmUp() async { await shared.warm() }
+    /// Starts loading in the background (no-op when absent or already loading) and runs one tiny generation
+    /// so the dictation does not pay for kernel compilation. Call when a local dictation begins.
+    static func prepare() { shared.prepareInBackground() }
 
     private var available: Bool {
         lock.lock(); defer { lock.unlock() }
@@ -86,6 +89,8 @@ final class MLXFormatter: @unchecked Sendable {
         if let t = loadTask { return t }
         let dir = Self.modelDirectory
         let t = Task.detached(priority: .utility) { () -> ModelContainer in
+            // Keep freed buffers from being hoarded by MLX's allocator cache.
+            Memory.cacheLimit = 64 * 1024 * 1024
             try await loadModelContainer(from: dir, using: LocalTokenizerLoader())
         }
         loadTask = t
@@ -96,6 +101,7 @@ final class MLXFormatter: @unchecked Sendable {
     private func markFailed() { lock.lock(); failed = true; lock.unlock() }
 
     private func container() async throws -> ModelContainer {
+        idle.touch { [self] in unloadIfIdle() }
         do {
             let c = try await loadTaskLocked().value
             markLoaded()
@@ -154,6 +160,7 @@ final class MLXFormatter: @unchecked Sendable {
             generateParameters: GenerateParameters(maxTokens: maxTokens, temperature: 0),
             additionalContext: ["enable_thinking": false])
         let out = try await session.respond(to: user)
+        idle.touch { [self] in unloadIfIdle() }
         return Self.clean(out)
     }
 
@@ -166,10 +173,27 @@ final class MLXFormatter: @unchecked Sendable {
         return t.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func warm() async {
+    private func prepareInBackground() {
         guard available else { return }
-        let t0 = Date()
-        _ = try? await generate(system: "Reply with one word.", user: "hello", maxTokens: 4)
-        if isResident { elog("MLX formatter ready in \(Int(Date().timeIntervalSince(t0) * 1000)) ms") }
+        idle.touch { [self] in unloadIfIdle() }
+        Task.detached(priority: .utility) { [self] in
+            let t0 = Date()
+            let was = isResident
+            _ = try? await generate(system: "Reply with one word.", user: "hello", maxTokens: 4)
+            if !was && isResident { elog("MLX formatter ready in \(Int(Date().timeIntervalSince(t0) * 1000)) ms") }
+        }
+    }
+
+    /// Releases the model and MLX's buffer cache. Returns false when a generation is in flight.
+    private func unloadIfIdle() -> Bool {
+        lock.lock()
+        if busy { lock.unlock(); return false }
+        guard loaded else { lock.unlock(); return true }
+        loadTask = nil
+        loaded = false
+        lock.unlock()
+        Memory.clearCache()
+        elog("MLX formatter unloaded after idle")
+        return true
     }
 }

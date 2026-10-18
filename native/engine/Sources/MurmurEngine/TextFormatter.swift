@@ -97,8 +97,9 @@ final class TextFormatter: @unchecked Sendable {
     /// Returns (text, "", model) on success or (nil, skipReason, "") when the caller should fall back.
     private func llmFormat(transcript: String, ini: InitInfo, ctx: ContextInfo, instruction: String?) async -> (String?, String, String) {
         // The distilled MLX model takes the student prompt, which has no slot for an extra instruction.
-        // While it is still loading, Apple Foundation Models (when present) covers the first dictations.
-        if MLXFormatter.isAvailable && (MLXFormatter.isLoaded || !AppleLLM.isAvailable) && (instruction ?? "").isEmpty {
+        // The MLX model loads lazily; until it is resident this dictation uses Apple FM, else the rules.
+        if MLXFormatter.isAvailable && (instruction ?? "").isEmpty { MLXFormatter.prepare() }
+        if MLXFormatter.isLoaded && (instruction ?? "").isEmpty {
             let r = await mlxFormat(transcript: transcript, ini: ini, ctx: ctx)
             if r.0 != nil || !AppleLLM.isAvailable || r.1 != "formatter_error" { return r }
             // The MLX model failed to load or run: fall back to Apple Foundation Models.

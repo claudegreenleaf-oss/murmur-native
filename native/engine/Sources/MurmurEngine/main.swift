@@ -26,7 +26,6 @@ do {
     try server.start()
     // Keep the server alive for the lifetime of the process.
     withExtendedLifetime(server) {}
-    engine.warmUp()
 
     if watchStdin {
         // The Electron app owns our lifetime: when its end of the stdin pipe closes, exit.

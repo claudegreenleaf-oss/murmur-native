@@ -36,6 +36,7 @@ actor DictationSession {
             ini = InitInfo(json: j.obj("init"))
             ctx = ContextInfo(json: j.obj("context"))
             gotInit = true
+            engine.prepareForDictation(mode: ini.mode)
             startHeartbeat()
         case "context":
             ctx = ContextInfo(json: j.obj("context"))

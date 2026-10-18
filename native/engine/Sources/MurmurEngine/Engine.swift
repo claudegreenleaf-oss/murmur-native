@@ -12,16 +12,20 @@ final class Engine: @unchecked Sendable {
             "ok": true,
             "engine": "local",
             "asr": ASREngine.modelName,
-            "llm": (MLXFormatter.isLoaded ? ("murmur-formatter-mlx" as Any)
+            "llm": (MLXFormatter.isAvailable ? ("murmur-formatter-mlx" as Any)
                 : AppleLLM.isAvailable ? ("apple-foundation-models" as Any) : (NSNull() as Any)),
             "version": "1",
         ]
     }
 
-    func warmUp() {
+    private let appleWarmed = Gate()
+
+    /// Called when a local dictation starts (the init frame): loads the models while the user is still
+    /// speaking. Nothing is loaded at process start, so an idle engine costs almost nothing.
+    func prepareForDictation(mode: String) {
         Task { await self.asr.warm() }
-        Task { await AppleLLM.warmUp() }
-        Task { await MLXFormatter.warmUp() }
+        if mode != "command" { MLXFormatter.prepare() }
+        if appleWarmed.fire() { Task { await AppleLLM.warmUp() } }
     }
 
     func handleFormat(_ body: JSON) async -> JSON {
