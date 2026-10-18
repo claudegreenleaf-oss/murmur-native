@@ -12,7 +12,8 @@ final class Engine: @unchecked Sendable {
             "ok": true,
             "engine": "local",
             "asr": ASREngine.modelName,
-            "llm": (AppleLLM.isAvailable ? ("apple-foundation-models" as Any) : (NSNull() as Any)),
+            "llm": (MLXFormatter.isLoaded ? ("murmur-formatter-mlx" as Any)
+                : AppleLLM.isAvailable ? ("apple-foundation-models" as Any) : (NSNull() as Any)),
             "version": "1",
         ]
     }
@@ -20,6 +21,7 @@ final class Engine: @unchecked Sendable {
     func warmUp() {
         Task { await self.asr.warm() }
         Task { await AppleLLM.warmUp() }
+        Task { await MLXFormatter.warmUp() }
     }
 
     func handleFormat(_ body: JSON) async -> JSON {

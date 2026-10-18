@@ -48,10 +48,3 @@ node scripts/ipc-smoke.js "/path/to/Murmur.app/Contents/MacOS/Murmur"
 ```
 It sends `IsReady`, `GetAccessibilityStatus`, `GetHardwareInfo` and an unknown message, prints every reply,
 then `HelperAppShutdown`.
-
-## Notetaker additions
-
-System audio capture (`StartSystemAudioCapture`, `SystemAudioChunk`, `SystemAudioCaptureState`, status and permission
-requests), the microphone holders monitor and the EventKit calendar bridge are specified in `shared/protocol/HELPER.md`
-("Notetaker additions"). The audio items need macOS 14.4+. The bundle declares `NSAudioCaptureUsageDescription` and
-`NSCalendarsFullAccessUsageDescription`.

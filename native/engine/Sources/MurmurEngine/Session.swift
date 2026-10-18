@@ -228,7 +228,7 @@ actor DictationSession {
                 result = buildResult(
                     status: "formatted", plaintext: text, html: PostProcess.toHTML(text), raw: raw, reason: "",
                     startsProper: false, transcribeMs: transcribeMs, formatMs: Int(Date().timeIntervalSince(t0) * 1000) - transcribeMs,
-                    t0: t0, audio: audioSeconds, stats: (0, 0), llm: true)
+                    t0: t0, audio: audioSeconds, stats: (0, 0), llm: "apple-foundation-models")
             } catch {
                 sendError("llm_unavailable", "Command mode needs Apple Foundation Models")
                 return
@@ -241,7 +241,7 @@ actor DictationSession {
                 status: o.status, plaintext: o.plaintext, html: o.html, raw: raw, reason: o.skipReason,
                 startsProper: o.startsWithProperNoun, transcribeMs: transcribeMs, formatMs: o.formatMs,
                 t0: t0, audio: audioSeconds, stats: (o.deletions, o.substitutions),
-                llm: o.status == "formatted" && ini.format != "none")
+                llm: o.status == "formatted" && ini.format != "none" ? o.llmModel : "")
         }
         out.sendText(encodeJSONString(["type": "result", "result": result] as JSON))
         finishSession()
@@ -249,7 +249,7 @@ actor DictationSession {
 
     private func buildResult(
         status: String, plaintext: String, html: String, raw: String, reason: String, startsProper: Bool,
-        transcribeMs: Int, formatMs: Int, t0: Date, audio: Double, stats: (Int, Int), llm: Bool
+        transcribeMs: Int, formatMs: Int, t0: Date, audio: Double, stats: (Int, Int), llm: String
     ) -> JSON {
         let langs = ini.languages.isEmpty ? ["en"] : ini.languages
         return [
@@ -270,7 +270,7 @@ actor DictationSession {
             "audio_duration_s": finiteDouble(audio),
             "engine": "local",
             "asr_model": ASREngine.modelName,
-            "llm_model": llm ? ("apple-foundation-models" as Any) : (NSNull() as Any),
+            "llm_model": llm.isEmpty ? (NSNull() as Any) : (llm as Any),
             "stats": ["word_deletions": stats.0, "word_substitutions": stats.1] as JSON,
         ]
     }

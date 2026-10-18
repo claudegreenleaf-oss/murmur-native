@@ -12,7 +12,7 @@ jobs:
   build:
     if: github.repository == 'claudegreenleaf-oss/murmur-native'
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -25,39 +25,54 @@ jobs:
       - name: Bundle shared prompts as package resources
         run: |
           mkdir -p native/engine/Sources/MurmurEngine/Resources/prompts
-          cp shared/prompts/format-system.txt shared/prompts/command-system.txt \
+          cp shared/prompts/format-system.txt shared/prompts/format-system-student.txt shared/prompts/command-system.txt \
              shared/prompts/extract-edited-words-system.txt shared/prompts/format-fragments.json \
              shared/prompts/format-request.md \
              shared/prompts/polish-system.txt shared/prompts/polish-rules.json \
              native/engine/Sources/MurmurEngine/Resources/prompts/
           ls -la native/engine/Sources/MurmurEngine/Resources/prompts
 
-      - name: Cache SwiftPM build
+      # MLX's Metal shaders (default.metallib) are only compiled by xcodebuild, never by plain `swift build`,
+      # so the engine is built through the package scheme with the Xcode toolchain.
+      - name: Metal toolchain
+        run: |
+          xcrun -sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+          xcrun -sdk macosx metal --version
+
+      - name: Cache build
         uses: actions/cache@v4
         with:
-          path: native/engine/.build
-          key: engine-${{ runner.os }}-${{ hashFiles('native/engine/Package.swift') }}
-          restore-keys: engine-${{ runner.os }}-
+          path: native/engine/.dd
+          key: engine-xcode-${{ runner.os }}-${{ hashFiles('native/engine/Package.swift') }}
+          restore-keys: engine-xcode-${{ runner.os }}-
 
-      - name: Build release (arm64)
+      - name: Build release (arm64, xcodebuild)
         working-directory: native/engine
         run: |
           set -o pipefail
-          swift build -c release --arch arm64 2>&1 | tee build.log
+          xcodebuild build -scheme MurmurEngine -configuration Release \
+            -destination 'platform=macOS,arch=arm64' -derivedDataPath .dd \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO 2>&1 | tee build.log | grep -E "error:|warning: unable|BUILD|Compiling mlx|Linking" | tail -n 80
 
       - name: Locate products
         id: bin
-        working-directory: native/engine
         run: |
-          BIN_PATH="$(swift build -c release --arch arm64 --show-bin-path)"
-          echo "path=$BIN_PATH" >> "$GITHUB_OUTPUT"
-          ls -la "$BIN_PATH" | head -30
+          PRODUCTS="$PWD/native/engine/.dd/Build/Products/Release"
+          ls -la "$PRODUCTS"
+          echo "path=$PRODUCTS" >> "$GITHUB_OUTPUT"
+          find "$PRODUCTS" -name '*.metallib' -exec ls -la {} \;
 
       - name: Stage artifact
         run: |
+          P="${{ steps.bin.outputs.path }}"
           mkdir -p stage/murmur-engine
-          cp "${{ steps.bin.outputs.path }}/MurmurEngine" stage/murmur-engine/
-          cp -R "${{ steps.bin.outputs.path }}"/MurmurEngine_MurmurEngine.bundle stage/murmur-engine/
+          cp "$P/MurmurEngine" stage/murmur-engine/
+          cp -R "$P/MurmurEngine_MurmurEngine.bundle" stage/murmur-engine/
+          # MLX loads mlx.metallib from the directory of the executable first.
+          METALLIB="$(find "$P/mlx-swift_Cmlx.bundle" -name default.metallib | head -1)"
+          test -n "$METALLIB" || { echo "::error::default.metallib was not built"; exit 1; }
+          cp "$METALLIB" stage/murmur-engine/mlx.metallib
+          test "$(stat -f%z stage/murmur-engine/mlx.metallib)" -gt 1000000
           ls -laR stage
 
       - name: Sign

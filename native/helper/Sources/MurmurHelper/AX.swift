@@ -531,17 +531,3 @@ func readAppContext(focus: FocusRef?, bundleId: String, windowTitle: String, use
     }
     return ctx
 }
-
-/// Front tab URL and window title of a specific (browser) process.
-func readBrowserTabInfo(pid: pid_t) -> JSON {
-    guard AXIsProcessTrusted(), let app = NSRunningApplication(processIdentifier: pid) else {
-        return ["url": "", "title": "", "bundleId": ""]
-    }
-    AppKinds.ensureAccessibility(app)
-    let ael = axAppElement(pid)
-    let window = axElem(ael, axaFocusedWindow) ?? axElem(ael, axaMainWindow)
-    let title = window.flatMap { axStr($0, axaTitle) } ?? ""
-    let focused = axElem(ael, axaFocusedUIElement)
-    let url = findWebAreaURL(focused: focused, window: window, deadline: monoMs() + 300)
-    return ["url": url, "title": title, "bundleId": app.bundleIdentifier ?? ""]
-}

@@ -3,6 +3,7 @@ import Foundation
 /// Loads the shared prompts bundled as SwiftPM resources (copied from shared/prompts at build time).
 struct Prompts {
     let formatSystem: String
+    let formatSystemStudent: String
     let commandSystem: String
     let extractSystem: String
     let strength: [String: String]
@@ -29,6 +30,7 @@ struct Prompts {
         func map(_ k: String) -> [String: String] { frag.strMap(k) }
         return Prompts(
             formatSystem: text("format-system", "txt"),
+            formatSystemStudent: text("format-system-student", "txt"),
             commandSystem: text("command-system", "txt"),
             extractSystem: text("extract-edited-words-system", "txt"),
             strength: map("editing_strength"),
@@ -73,5 +75,70 @@ struct Prompts {
 
     static func userMessage(_ transcript: String) -> String {
         "TRANSCRIPT:\n<<<\n\(transcript)\n>>>"
+    }
+
+    // MARK: Student (distilled formatter) prompt
+
+    /// System message for the local MLX formatter. Mirrors the a6000 server's `prompts.system_message` and
+    /// `formatting.context_block` byte for byte, with the static rules replaced by format-system-student.txt.
+    func studentSystemMessage(ini: InitInfo, ctx: ContextInfo) -> String {
+        var rules = formatSystemStudent
+        while rules.hasSuffix("\n") { rules.removeLast() }
+        // The server joins [rules, "", fragment...] with "\n", so the first fragment follows a blank line.
+        var parts: [String] = [rules, ""]
+        let category = styleCategory[ctx.appType] ?? "other"
+        let writing = ini.generalStyle[category] ?? "formal"
+        for f in [strength[ini.editingStrength] ?? "", style[writing] ?? "", appType[ctx.appType] ?? ""] where !f.isEmpty {
+            parts.append(f)
+        }
+        var msg = parts.joined(separator: "\n")
+        let block = Self.studentContextBlock(ini: ini, ctx: ctx)
+        if !block.isEmpty { msg += "\n\n" + block }
+        return msg
+    }
+
+    /// Order-preserving, case-insensitive de-duplication of stripped items (the server's `_dedupe`).
+    private static func dedupe(_ items: [String]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for raw in items {
+            let it = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let k = it.lowercased()
+            if it.isEmpty || seen.contains(k) { continue }
+            seen.insert(k)
+            out.append(it)
+        }
+        return out
+    }
+
+    private static func studentContextBlock(ini: InitInfo, ctx: ContextInfo) -> String {
+        var lines: [String] = []
+        let name = [ini.firstName, ini.lastName].filter { !$0.isEmpty }.joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { lines.append("USER NAME: " + name) }
+        let vocab = Array(dedupe(ini.starred + ini.dictionary).prefix(200))
+        if !vocab.isEmpty { lines.append("VOCABULARY: " + vocab.joined(separator: ", ")) }
+        if !ctx.appName.isEmpty || !ctx.bundleId.isEmpty {
+            var line = "APP: \(ctx.appName) (\(ctx.bundleId))"
+            if !ctx.url.isEmpty { line += ", " + ctx.url }
+            lines.append(line)
+        }
+        if !ctx.windowTitle.isEmpty { lines.append("WINDOW: " + ctx.windowTitle) }
+        // Python slices by code point, so slice by unicode scalar rather than by Character.
+        if !ctx.before.isEmpty {
+            lines.append("TEXT BEFORE CURSOR:\n<<<\n" + String(String.UnicodeScalarView(ctx.before.unicodeScalars.suffix(500))) + "\n>>>")
+        }
+        if !ctx.selected.isEmpty { lines.append("SELECTED TEXT:\n<<<\n" + ctx.selected + "\n>>>") }
+        if !ctx.after.isEmpty {
+            lines.append("TEXT AFTER CURSOR:\n<<<\n" + String(String.UnicodeScalarView(ctx.after.unicodeScalars.prefix(500))) + "\n>>>")
+        }
+        let screen = Array(dedupe(ctx.screenAx + ctx.variableNames + ctx.fileNames + ctx.screenOcr).prefix(150))
+        if !screen.isEmpty { lines.append("SCREEN WORDS: " + screen.joined(separator: ", ")) }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The server's `user_message(raw)`.
+    static func studentUserMessage(_ transcript: String) -> String {
+        "TRANSCRIPT:\n<<<\n\(transcript)\n>>>\n\nOutput the cleaned transcript text only."
     }
 }

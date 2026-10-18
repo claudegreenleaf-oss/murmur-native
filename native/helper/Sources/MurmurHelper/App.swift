@@ -41,13 +41,11 @@ final class HelperApp {
         case "StartAllIntervals":
             SecureInputMonitor.shared.start()
             HardwareMonitor.shared.start()
-            DockMonitor.shared.start()
             reply(.ack)
 
         case "StopAllIntervals":
             SecureInputMonitor.shared.stop()
             HardwareMonitor.shared.stop()
-            DockMonitor.shared.stop()
             reply(.ack)
 
         case "SetSecureInputMonitor":
@@ -129,73 +127,6 @@ final class HelperApp {
         case "CheckStaleKeys":
             let codes = ((payloadDict(value)["keycodes"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
             reply(.data("StaleKeysResponse", ["staleKeys": KeyTap.shared.staleKeys(codes)]))
-
-        case "PositionBrowserWindow":
-            let p = payloadDict(value)
-            let name = p["browserName"] as? String ?? ""
-            let mode = p["mode"] as? String ?? "split"
-            let minW = (p["recorderMinWidth"] as? NSNumber)?.doubleValue ?? 500
-            let frac = (p["recorderWidthFraction"] as? NSNumber)?.doubleValue ?? 0.3
-            axQueue.async {
-                reply(.data("BrowserWindowPositioned", BrowserPositioner.shared.position(name: name, mode: mode, minWidth: minW, fraction: frac)))
-            }
-
-        case "GetRunningApps":
-            reply(.data("RunningApps", RunningApps.list()))
-
-        case "StartSpeakerPolling":
-            SpeakerPoller.shared.start(payloadDict(value))
-            reply(.ack)
-
-        case "StopSpeakerPolling":
-            SpeakerPoller.shared.stop()
-            reply(.ack)
-
-        case "GetBrowserTabInfo":
-            let pid = (payloadDict(value)["processId"] as? NSNumber)?.int32Value ?? 0
-            axQueue.async { reply(.data("BrowserTabInfo", readBrowserTabInfo(pid: pid))) }
-
-        case "GetSystemAudioStatus":
-            reply(.data("SystemAudioStatus", SystemAudio.status()))
-
-        case "RequestSystemAudioPermission":
-            guard #available(macOS 14.4, *) else { return reply(.data("SystemAudioPromptResult", ["result": "unavailable"])) }
-            SystemAudioTap.shared.triggerPrompt { reply(.data("SystemAudioPromptResult", ["result": $0])) }
-
-        case "StartSystemAudioCapture":
-            guard #available(macOS 14.4, *) else { return reply(.error("macOS 14.4 or newer required", "UNSUPPORTED_OS")) }
-            let p = payloadDict(value)
-            let prefixes = (p["excludeBundleIdPrefixes"] as? [String]) ?? ["com.thomasgreenleaf.murmur"]
-            let pids = ((p["excludePids"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.intValue }
-            SystemAudioTap.shared.start(prefixes: prefixes, pids: pids) { err in
-                if let err { reply(.error("System audio capture failed: \(err)", "SYSTEM_AUDIO_START_FAILED")) } else { reply(.ack) }
-            }
-
-        case "StopSystemAudioCapture":
-            guard #available(macOS 14.4, *) else { return reply(.ack) }
-            SystemAudioTap.shared.stop { reply(.ack) }
-
-        case "SetMicrophoneHoldersMonitor":
-            guard #available(macOS 14.4, *) else { return reply(.error("macOS 14.4 or newer required", "UNSUPPORTED_OS")) }
-            let p = payloadDict(value)
-            MicHoldersMonitor.shared.set(enabled: (p["enabled"] as? Bool) ?? false, cadenceMs: (p["cadenceMs"] as? NSNumber)?.intValue)
-            reply(.ack)
-
-        case "GetMicrophoneHolders":
-            guard #available(macOS 14.4, *) else { return reply(.error("macOS 14.4 or newer required", "UNSUPPORTED_OS")) }
-            axQueue.async { reply(.data("MicrophoneHolders", MicHoldersMonitor.shared.snapshot())) }
-
-        case "GetCalendarAccessStatus":
-            reply(.data("CalendarAccessStatus", ["status": CalendarBridge.shared.status()]))
-
-        case "RequestCalendarAccess":
-            CalendarBridge.shared.requestAccess { reply(.data("CalendarAccessStatus", ["status": $0])) }
-
-        case "GetCalendarEvents":
-            let p = payloadDict(value)
-            let from = (p["fromMs"] as? NSNumber)?.doubleValue ?? 0
-            let to = (p["toMs"] as? NSNumber)?.doubleValue ?? 0
-            axQueue.async { reply(.data("CalendarEvents", CalendarBridge.shared.events(fromMs: from, toMs: to))) }
 
         default:
             reply(.error("No handler registered for \(name)", "NO_HANDLER_REGISTERED"))

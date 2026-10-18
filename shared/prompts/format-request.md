@@ -44,15 +44,11 @@ request then only prefills the user message.
 
 ## User message
 
-The closing cue line is required: without it Qwen3.8 sometimes returns an empty reply for short utterances.
-
 ```
 TRANSCRIPT:
 <<<
 <raw transcript after replacement rules>
 >>>
-
-Output the cleaned transcript text only.
 ```
 
 ## Decoding

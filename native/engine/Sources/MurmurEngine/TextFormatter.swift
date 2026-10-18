@@ -7,6 +7,7 @@ struct FormatOutcome {
     var skipReason = ""
     var formatMs = 0
     var startsWithProperNoun = false
+    var llmModel = ""                 // model that produced the text, empty when rules did
     var deletions = 0
     var substitutions = 0
 }
@@ -54,10 +55,11 @@ final class TextFormatter: @unchecked Sendable {
             out.status = "raw_transcript"
             out.skipReason = "client_disabled"
         } else {
-            let (formatted, reason) = await llmFormat(transcript: transcript, ini: ini, ctx: ctx, instruction: instruction)
+            let (formatted, reason, model) = await llmFormat(transcript: transcript, ini: ini, ctx: ctx, instruction: instruction)
             if let f = formatted {
                 text = f
                 out.status = "formatted"
+                out.llmModel = model
             } else {
                 let cleaned = RuleCleanup.clean(transcript, style: styleName, format: ini.format)
                 out.skipReason = reason
@@ -92,9 +94,16 @@ final class TextFormatter: @unchecked Sendable {
         return out
     }
 
-    /// Returns (text, "") on success or (nil, skipReason) when the caller should fall back.
-    private func llmFormat(transcript: String, ini: InitInfo, ctx: ContextInfo, instruction: String?) async -> (String?, String) {
-        guard AppleLLM.isAvailable else { return (nil, "formatter_error") }
+    /// Returns (text, "", model) on success or (nil, skipReason, "") when the caller should fall back.
+    private func llmFormat(transcript: String, ini: InitInfo, ctx: ContextInfo, instruction: String?) async -> (String?, String, String) {
+        // The distilled MLX model takes the student prompt, which has no slot for an extra instruction.
+        // While it is still loading, Apple Foundation Models (when present) covers the first dictations.
+        if MLXFormatter.isAvailable && (MLXFormatter.isLoaded || !AppleLLM.isAvailable) && (instruction ?? "").isEmpty {
+            let r = await mlxFormat(transcript: transcript, ini: ini, ctx: ctx)
+            if r.0 != nil || !AppleLLM.isAvailable || r.1 != "formatter_error" { return r }
+            // The MLX model failed to load or run: fall back to Apple Foundation Models.
+        }
+        guard AppleLLM.isAvailable else { return (nil, "formatter_error", "") }
         let system = Prompts.shared.systemMessage(ini: ini, ctx: ctx, instruction: instruction, compact: true)
         let prompt: String = Prompts.userMessage(transcript)
         let approxTokens = Int(Double(PostProcess.words(transcript).count) * 1.5) + 8
@@ -105,18 +114,43 @@ final class TextFormatter: @unchecked Sendable {
                 try await AppleLLM.respond(instructions: system, prompt: prompt, maxTokens: maxTokens)
             }
             markSuccess()
-            let cleaned = PostProcess.stripEchoes(raw)
-            if cleaned.isEmpty { return (nil, "formatter_empty_output") }
-            if PostProcess.looksHallucinated(output: cleaned, transcript: transcript, strength: ini.editingStrength) {
-                return (nil, "formatter_hallucination")
-            }
-            return (cleaned, "")
+            return guarded(raw, transcript: transcript, ini: ini, model: "apple-foundation-models")
         } catch is RaceTimeout {
-            return (nil, "formatter_timeout")
+            return (nil, "formatter_timeout", "")
         } catch {
             elog("formatter error: \(error)")
-            return (nil, "formatter_error")
+            return (nil, "formatter_error", "")
         }
+    }
+
+    private func mlxFormat(transcript: String, ini: InitInfo, ctx: ContextInfo) async -> (String?, String, String) {
+        let system = Prompts.shared.studentSystemMessage(ini: ini, ctx: ctx)
+        let prompt = Prompts.studentUserMessage(transcript)
+        let approxTokens = Int(Double(PostProcess.words(transcript).count) * 1.5) + 8
+        let maxTokens = min(2 * approxTokens + 64, 2000)
+        do {
+            let t = timeout
+            let raw = try await race(timeout: t) {
+                try await MLXFormatter.respond(system: system, user: prompt, maxTokens: maxTokens)
+            }
+            markSuccess()
+            return guarded(raw, transcript: transcript, ini: ini, model: "murmur-formatter-mlx")
+        } catch is RaceTimeout {
+            return (nil, "formatter_timeout", "")
+        } catch {
+            elog("mlx formatter error: \(error)")
+            return (nil, "formatter_error", "")
+        }
+    }
+
+    /// Shared output guards for both models.
+    private func guarded(_ raw: String, transcript: String, ini: InitInfo, model: String) -> (String?, String, String) {
+        let cleaned = PostProcess.stripEchoes(raw)
+        if cleaned.isEmpty { return (nil, "formatter_empty_output", "") }
+        if PostProcess.looksHallucinated(output: cleaned, transcript: transcript, strength: ini.editingStrength) {
+            return (nil, "formatter_hallucination", "")
+        }
+        return (cleaned, "", model)
     }
 
     // MARK: Command mode
